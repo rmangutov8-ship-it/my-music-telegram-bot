@@ -1,37 +1,10 @@
-from flask import Flask
-from datetime import datetime
+from flask import Flask, render_template
 
 app = Flask(__name__)
 
-
 @app.route('/')
 def home():
-    # Получаем текущее время, чтобы сайт был "живым"
-    current_time = datetime.now().strftime('%H:%M:%S')
-
-    return f"""
-    <html>
-        <head>
-            <title>Моя IT-Визитка</title>
-            <style>
-                body {{ background: #121212; color: white; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }}
-                .card {{ background: #1e1e1e; padding: 40px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); text-align: center; border: 1px solid #333; }}
-                h1 {{ color: #00ff88; }}
-                .time {{ color: #888; font-size: 0.9em; margin-top: 20px; }}
-                .btn {{ background: #00ff88; color: #121212; padding: 10px 20px; border-radius: 5px; text-decoration: none; font-weight: bold; }}
-            </style>
-        </head>
-        <body>
-            <div class="card">
-                <h1>Привет! Я учу Python 🐍</h1>
-                <p>Это мой первый полноценный сервер.</p>
-                <a href="#" class="btn">Связаться со мной</a>
-                <div class="time">Время на сервере: {current_time}</div>
-            </div>
-        </body>
-    </html>
-    """
-
+    return render_template('index.html')
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0', port=5000)
